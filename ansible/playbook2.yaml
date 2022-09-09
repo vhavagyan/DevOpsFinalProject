@@ -1,0 +1,241 @@
+---
+
+- hosts: TF_servers
+  become: true
+  tasks:
+    - name: Install aptitude
+      apt:
+        name: aptitude
+        state: latest
+        update_cache: true
+
+    - name: Install required system packages
+      apt:
+        pkg:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - software-properties-common
+          - python3-pip
+          - virtualenv
+          - python3-setuptools
+        state: latest
+        update_cache: true
+    - name: Add Docker GPG apt Key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker Repository
+      apt_repository:
+        repo: deb https://download.docker.com/linux/ubuntu focal stable
+        state: present
+
+    - name: Update apt and install docker-ce
+      apt:
+        name: docker-ce
+        state: latest
+        update_cache: true
+
+    - name: Install Docker Module for Python
+      pip: 
+        name: docker
+    - name: Pull default Docker image
+      community.docker.docker_image:
+        name: docker
+        source: pull
+##################################################################
+    # - name: Copy Dockerfile 
+    #   copy: 
+    #      src: Dockerfile
+    #      dest: ./
+      # - name: Create jenkins container
+      #   docker_container:
+      #     name: jenkins
+      #     dockerfile: Dockerfile
+      #     image: jenkins/jenkins:lts-jdk11
+      #     hostname: jenkins
+      #     restart_policy: unless-stopped
+      #     state: started
+      #     ports: 
+      #     - 8080:8080/tcp
+      #     volumes:
+      #     - jenkins_home:/var/jenkins_home
+      #     - /var/run/docker.sock:/var/run/docker.sock
+
+   
+    # Prometheus 
+  #  ---------------------------------------------------------    
+    - name: Prometheus data volume
+      docker_volume:
+       name: prometheus-data  
+    
+    - name: Create /opt/prometheus-config directory
+      file: 
+        path: /opt/prometheus-config
+        state: directory
+    
+    - name: Copy Prometheus config to /opt/prometheus-config
+      copy: 
+        src: prometheus.yml
+        dest: /opt/prometheus-config
+    
+    - name: prometheus
+      docker_container:
+        name: prometheus
+        image: prom/prometheus:latest
+        hostname: prometheus
+        restart_policy: unless-stopped
+        state: started
+        ports:
+          - 9090:9090
+        command: 
+          - "--config.file=/etc/prometheus/prometheus.yml"
+        volumes: 
+          - /opt/prometheus-config:/etc/prometheus
+          - prometheus-data:/prometheus
+        
+      
+      #Grafana 
+      # ---------------------------------------------------------        
+    - name: Grafana data volume
+      docker_volume:
+        name: grafana-data    
+      
+    - name: Create /etc/grafana directory
+      file: 
+        path: /etc/grafana
+        state: directory
+    
+    - name: Copy grafana.ini file to /etc/grafana
+      copy: 
+        src: grafana.ini
+        dest: /etc/grafana
+    - name: grafana
+      docker_container: 
+        name: grafana
+        image: grafana/grafana-oss:latest
+        hostname: grafana
+        restart_policy: unless-stopped
+        state: started
+        ports: 
+          - 3000:3000/tcp
+        # command: 
+        #   - "grafana.ini=/etc/grafana/grafana.ini"
+        volumes:
+          - grafana-data:/var/lib/grafana
+          - grafana-data:/etc/grafana
+#   #Nexus
+#     - name: nexus
+#       docker_container:
+#         name: nexus
+#         image: hoso30/nexus:ver_witdh_repo_nexus_repo
+#         hostname: nexus
+#         restart_policy: unless-stopped
+#         state: started
+#         ports: 8081:8081/tcp
+#         volumes:
+#             - "nexus-data:/sonatype-work"
+
+#     # - shell: docker exec -it nexus /bin/bash "docker pull hoso30/nexus:ver_witdh_repo_nexus_repo"
+#     # - shell: docker exec -it docker pull hoso30/nexus:ver_witdh_repo_nexus_repo
+#     # - shell: sudo docker run -d -p 8081:8081 -p 8082:8082 hoso30/nexus:nexusv1
+  
+    
+#       #   file:
+#       #     path: ~/dockerfiles
+#       #     state: directory    
+#       # - name: Copy docker files
+#       #   copy: 
+#       #     src: '{{item}}'
+#       #     dest: /home/ubuntu
+#       #   loop:
+#       #     - casc.yaml
+#       #     - Dockerfile
+#       #     - install-plugins.sh
+#       #     - plugins.txt
+#       #     - docker-compose.yml
+#       # - shell: sudo apt update
+#       # - shell: sudo apt-get install python3-pip -y
+#       # - shell: sudo apt-get install docker-compose -y
+#       # - shell: sudo docker-compose up -d 
+
+
+- name: install github runnner
+  hosts:  TF_servers
+  become: true
+
+  tasks:
+    - name: Make runner working directory
+      file:
+        path: /home/ubuntu/actions-runner/
+        state: directory
+        owner: ubuntu
+        mode: '0755'
+      
+    - name: Download actions-runner-linux-x64-2.296.1.tar.gz
+      get_url:
+        url: "https://github.com/actions/runner/releases/download/v2.296.1/actions-runner-linux-x64-2.296.1.tar.gz"
+        dest: /tmp/actions-runner-linux-x64-2.296.1.tar.gz
+        checksum: sha256:bc943386c499508c1841bd046f78df4f22582325c5d8d9400de980cb3613ed3b
+      become: true
+    - name: Extract actions-runner-linux-x64-2.296.1.tar.gz
+      unarchive:
+        src: /tmp/actions-runner-linux-x64-2.296.1.tar.gz
+        dest: /home/ubuntu/actions-runner/
+        remote_src: yes
+      become:  true
+    - name: Make file permissions ok
+      file:
+        path: /home/ubuntu/actions-runner/
+        owner: ubuntu
+        recurse: yes
+        mode: '0755'
+      become: true
+    
+    - name: Install dependencies
+      shell:
+        /home/ubuntu/actions-runner/bin/installdependencies.sh
+      become: true
+    
+    - name: Check currently registered runners for repo
+      uri:
+        url: "https://api.github.com/repos/Lyov-DevOps/Django_project/actions/runners/registration-token"
+        headers:
+          Authorization: "token "
+          Accept: "application/vnd.github.v3+json"
+        method: POST
+        status_code: 201
+        force_basic_auth: yes
+      register: registration
+      run_once: yes
+
+    - name: update
+      shell: apt-get update
+      become: true 
+   
+    - name: Make runner configs
+      shell: |
+        /home/ubuntu/actions-runner/config.sh \
+        --url https://github.com/Lyov-DevOps/Django_project \
+        --token registration.json.token \
+        --name Django \
+        --work _work \
+        --labels default \
+        --runnergroup default 
+      
+      become_user: ubuntu
+    
+    
+    - name: Create runner service
+      shell: |
+        cd /home/ubuntu/actions-runner/
+        /home/ubuntu/actions-runner/svc.sh install
+      become: true
+    
+    - name: Start runner as service
+      shell: |
+       cd /home/ubuntu/actions-runner/
+        /home/ubuntu/actions-runner/svc.sh start
+      
+      become: true
